@@ -127,16 +127,15 @@ void RH_RF95::handleInterrupt()
     uint8_t irq_flags = spiRead(RH_RF95_REG_12_IRQ_FLAGS);
     // Read the RegHopChannel register to check if CRC presence is signalled
     // in the header. If not it might be a stray (noise) packet.*
-    uint8_t crc_present = spiRead(RH_RF95_REG_1C_HOP_CHANNEL);
+    uint8_t crc_present = spiRead(RH_RF95_REG_1C_HOP_CHANNEL) & RH_RF95_RX_PAYLOAD_CRC_IS_ON;
 
-    if (_mode == RHModeRx
-	&& ((irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
-	    | !(crc_present & RH_RF95_RX_PAYLOAD_CRC_IS_ON)))
+    if ((irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
+	    || (_mode == RHModeRx && !crc_present))
 //    if (_mode == RHModeRx && irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     {
 	_rxBad++;
     }
-    else if (_mode == RHModeRx && irq_flags & RH_RF95_RX_DONE)
+    else if (irq_flags & RH_RF95_RX_DONE)
     {
 	// Have received a packet
 	uint8_t len = spiRead(RH_RF95_REG_13_RX_NB_BYTES);
@@ -170,7 +169,7 @@ void RH_RF95::handleInterrupt()
 	if (_rxBufValid)
 	    setModeIdle(); // Got one 
     }
-    else if (_mode == RHModeTx && irq_flags & RH_RF95_TX_DONE)
+    else if (irq_flags & RH_RF95_TX_DONE)
     {
 	_txGood++;
 	setModeIdle();
@@ -182,7 +181,8 @@ void RH_RF95::handleInterrupt()
     }
     // Sigh: on some processors, for some unknown reason, doing this only once does not actually
     // clear the radio's interrupt flag. So we do it twice. Why?
-    spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
+    // kevinh: turn this off until root cause is known, because it can cause missed interrupts!
+    // spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
     spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
 }
 
