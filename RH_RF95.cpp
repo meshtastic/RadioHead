@@ -50,20 +50,56 @@ bool RH_RF95::init()
 
     // No way to check the device type :-(
     
-    // Set sleep mode, so we can also set LORA mode:
-    spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_SLEEP | RH_RF95_LONG_RANGE_MODE);
-    delay(10); // Wait for sleep mode to take over from say, CAD
-    // Check we are in sleep mode, with LORA set
-    if (spiRead(RH_RF95_REG_01_OP_MODE) != (RH_RF95_MODE_SLEEP | RH_RF95_LONG_RANGE_MODE))
-    {
-//	Serial.println(spiRead(RH_RF95_REG_01_OP_MODE), HEX);
-	return false; // No device present?
-    }
-
     // Add by Adrien van den Bossche <vandenbo@univ-tlse2.fr> for Teensy
     // ARM M4 requires the below. else pin interrupt doesn't work properly.
     // On all other platforms, its innocuous, belt and braces
     pinMode(_interruptPin, INPUT); 
+
+    bool isWakeFromDeepSleep = false; // true if we think we are waking from deep sleep AND the rf95 seems to have a valid configuration
+
+    if(!isWakeFromDeepSleep) {
+        // Set sleep mode, so we can also set LORA mode:
+        spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_SLEEP | RH_RF95_LONG_RANGE_MODE);
+        delay(10); // Wait for sleep mode to take over from say, CAD
+        // Check we are in sleep mode, with LORA set
+        if (spiRead(RH_RF95_REG_01_OP_MODE) != (RH_RF95_MODE_SLEEP | RH_RF95_LONG_RANGE_MODE))
+        {
+    //	Serial.println(spiRead(RH_RF95_REG_01_OP_MODE), HEX);
+        return false; // No device present?
+        }
+
+        // Set up FIFO
+        // We configure so that we can use the entire 256 byte FIFO for either receive
+        // or transmit, but not both at the same time
+        spiWrite(RH_RF95_REG_0E_FIFO_TX_BASE_ADDR, 0);
+        spiWrite(RH_RF95_REG_0F_FIFO_RX_BASE_ADDR, 0);
+
+        // Packet format is preamble + explicit-header + payload + crc
+        // Explicit Header Mode
+        // payload is TO + FROM + ID + FLAGS + message data
+        // RX mode is implmented with RXCONTINUOUS
+        // max message data length is 255 - 4 = 251 octets
+
+        setModeIdle();
+
+        // Set up default configuration
+        // No Sync Words in LORA mode.
+        setModemConfig(Bw125Cr45Sf128); // Radio default
+    //    setModemConfig(Bw125Cr48Sf4096); // slow and reliable?
+        setPreambleLength(8); // Default is 8
+        // An innocuous ISM frequency, same as RF22's
+        setFrequency(434.0);
+        // Lowish power
+        setTxPower(13);
+    }
+    else {
+        // FIXME
+        // restore mode base off reading RS95 registers
+
+        // Only let CPU enter deep sleep if RF95 is sitting waiting on a receive or is in idle or sleep.
+    }
+
+    // geeksville: we do this last, because if there is an interrupt pending from during the deep sleep, this attach will cause it to be taken.
 
     // Set up interrupt handler
     // Since there are a limited number of interrupt glue functions isr*() available,
@@ -89,31 +125,14 @@ bool RH_RF95::init()
     else
 	return false; // Too many devices, not enough interrupt vectors
 
-    // Set up FIFO
-    // We configure so that we can use the entire 256 byte FIFO for either receive
-    // or transmit, but not both at the same time
-    spiWrite(RH_RF95_REG_0E_FIFO_TX_BASE_ADDR, 0);
-    spiWrite(RH_RF95_REG_0F_FIFO_RX_BASE_ADDR, 0);
-
-    // Packet format is preamble + explicit-header + payload + crc
-    // Explicit Header Mode
-    // payload is TO + FROM + ID + FLAGS + message data
-    // RX mode is implmented with RXCONTINUOUS
-    // max message data length is 255 - 4 = 251 octets
-
-    setModeIdle();
-
-    // Set up default configuration
-    // No Sync Words in LORA mode.
-    setModemConfig(Bw125Cr45Sf128); // Radio default
-//    setModemConfig(Bw125Cr48Sf4096); // slow and reliable?
-    setPreambleLength(8); // Default is 8
-    // An innocuous ISM frequency, same as RF22's
-    setFrequency(434.0);
-    // Lowish power
-    setTxPower(13);
-
     return true;
+}
+
+void RH_RF95::prepareDeepSleep() {
+    // Determine the interrupt number that corresponds to the interruptPin
+    int interruptNumber = digitalPinToInterrupt(_interruptPin);
+
+	detachInterrupt(interruptNumber);
 }
 
 // C++ level interrupt handler for this instance

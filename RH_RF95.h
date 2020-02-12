@@ -625,6 +625,12 @@ public:
     /// \return true if initialisation succeeded.
     virtual bool    init();
 
+    /// The main CPU is about to enter deep sleep, prepare the RF95 so it will be able to wake properly after we reboot
+    /// i.e. confirm we are in idle or rx mode, set a rtcram flag with state we need to restore after boot.  Later in boot 
+    /// we'll need to be careful not to wipe registers and be ready to handle any pending interrupts that occurred while
+    /// the main CPU was powered down.
+    void prepareDeepSleep();
+
     /// Prints the value of all chip registers
     /// to the Serial device if RH_HAVE_SERIAL is defined for the current platform
     /// For debugging purposes only.
