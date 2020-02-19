@@ -832,7 +832,7 @@ protected:
     /// This is a low level function to handle the interrupts for one instance of RH_RF95.
     /// Called automatically by isr*()
     /// Should not need to be called by user code.
-    void           handleInterrupt();
+    virtual void handleInterrupt();
 
     /// Examine the revceive buffer to determine whether the message is for this node
     void validateRxBuf();
@@ -863,6 +863,13 @@ private:
     /// else 0xff
     uint8_t             _myInterruptIndex;
 
+    // True if we are using the HF port (779.0 MHz and above)
+    bool                _usingHFport;
+
+    // Last measured SNR, dB
+    int8_t              _lastSNR;
+
+protected:
     /// Number of octets in the buffer
     volatile uint8_t    _bufLen;
     
@@ -871,12 +878,6 @@ private:
 
     /// True when there is a valid message in the buffer
     volatile bool       _rxBufValid;
-
-    // True if we are using the HF port (779.0 MHz and above)
-    bool                _usingHFport;
-
-    // Last measured SNR, dB
-    int8_t              _lastSNR;
 };
 
 /// @example rf95_client.pde
