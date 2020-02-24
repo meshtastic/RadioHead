@@ -25,7 +25,8 @@ PROGMEM static const RH_RF95::ModemConfig MODEM_CONFIG_TABLE[] =
 
 RH_RF95::RH_RF95(uint8_t slaveSelectPin, uint8_t interruptPin, RHGenericSPI &spi)
     : RHSPIDriver(slaveSelectPin, spi),
-      _rxBufValid(0)
+      _rxBufValid(0),
+      _isReceiving(false)
 {
     _interruptPin = interruptPin;
     _myInterruptIndex = 0xff; // Not allocated yet
@@ -91,6 +92,8 @@ bool RH_RF95::init()
         setFrequency(434.0);
         // Lowish power
         setTxPower(13);
+
+        Serial.printf("IRQ flag mask 0x%x\n", spiRead(RH_RF95_REG_11_IRQ_FLAGS_MASK));
     }
     else
     {
@@ -146,48 +149,64 @@ void RH_RF95::handleInterrupt()
 {
     // Read the interrupt register
     uint8_t irq_flags = spiRead(RH_RF95_REG_12_IRQ_FLAGS);
-    // Read the RegHopChannel register to check if CRC presence is signalled
-    // in the header. If not it might be a stray (noise) packet.*
-    uint8_t crc_present = spiRead(RH_RF95_REG_1C_HOP_CHANNEL) & RH_RF95_RX_PAYLOAD_CRC_IS_ON;
 
-    if ((irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR)) || (_mode == RHModeRx && !crc_present))
+    if (irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     //    if (_mode == RHModeRx && irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     {
         _rxBad++;
+        _isReceiving = false;
     }
     else if (irq_flags & RH_RF95_RX_DONE)
     {
-        // Have received a packet
-        uint8_t len = spiRead(RH_RF95_REG_13_RX_NB_BYTES);
+        // Read the RegHopChannel register to check if CRC presence is signalled
+        // in the header. If not it might be a stray (noise) packet.*
+        uint8_t crc_present = spiRead(RH_RF95_REG_1C_HOP_CHANNEL) & RH_RF95_RX_PAYLOAD_CRC_IS_ON;
 
-        // Reset the fifo read ptr to the beginning of the packet
-        spiWrite(RH_RF95_REG_0D_FIFO_ADDR_PTR, spiRead(RH_RF95_REG_10_FIFO_RX_CURRENT_ADDR));
-        spiBurstRead(RH_RF95_REG_00_FIFO, _buf, len);
-        _bufLen = len;
-        spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
-
-        // Remember the last signal to noise ratio, LORA mode
-        // Per page 111, SX1276/77/78/79 datasheet
-        _lastSNR = (int8_t)spiRead(RH_RF95_REG_19_PKT_SNR_VALUE) / 4;
-
-        // Remember the RSSI of this packet, LORA mode
-        // this is according to the doc, but is it really correct?
-        // weakest receiveable signals are reported RSSI at about -66
-        _lastRssi = spiRead(RH_RF95_REG_1A_PKT_RSSI_VALUE);
-        // Adjust the RSSI, datasheet page 87
-        if (_lastSNR < 0)
-            _lastRssi = _lastRssi + _lastSNR;
+        if (!crc_present)
+        {
+            _rxBad++;
+            _isReceiving = false;
+        }
         else
-            _lastRssi = (int)_lastRssi * 16 / 15;
-        if (_usingHFport)
-            _lastRssi -= 157;
-        else
-            _lastRssi -= 164;
+        {
+            // Have received a packet
+            uint8_t len = spiRead(RH_RF95_REG_13_RX_NB_BYTES);
 
-        // We have received a message.
-        validateRxBuf();
-        if (_rxBufValid)
-            setModeIdle(); // Got one
+            // Reset the fifo read ptr to the beginning of the packet
+            spiWrite(RH_RF95_REG_0D_FIFO_ADDR_PTR, spiRead(RH_RF95_REG_10_FIFO_RX_CURRENT_ADDR));
+            spiBurstRead(RH_RF95_REG_00_FIFO, _buf, len);
+            _bufLen = len;
+            spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags, required before reading
+
+            // Remember the last signal to noise ratio, LORA mode
+            // Per page 111, SX1276/77/78/79 datasheet
+            _lastSNR = (int8_t)spiRead(RH_RF95_REG_19_PKT_SNR_VALUE) / 4;
+
+            // Remember the RSSI of this packet, LORA mode
+            // this is according to the doc, but is it really correct?
+            // weakest receiveable signals are reported RSSI at about -66
+            _lastRssi = spiRead(RH_RF95_REG_1A_PKT_RSSI_VALUE);
+            // Adjust the RSSI, datasheet page 87
+            if (_lastSNR < 0)
+                _lastRssi = _lastRssi + _lastSNR;
+            else
+                _lastRssi = (int)_lastRssi * 16 / 15;
+            if (_usingHFport)
+                _lastRssi -= 157;
+            else
+                _lastRssi -= 164;
+
+            // We have received a message.
+            validateRxBuf();
+            if (_rxBufValid)
+                setModeIdle(); // Got one
+
+            _isReceiving = false;
+        }
+    }
+    else if (irq_flags & RH_RF95_VALID_HEADER)
+    {
+        _isReceiving = true;
     }
     else if (irq_flags & RH_RF95_TX_DONE)
     {
@@ -199,11 +218,16 @@ void RH_RF95::handleInterrupt()
         _cad = irq_flags & RH_RF95_CAD_DETECTED;
         setModeIdle();
     }
-    // Sigh: on some processors, for some unknown reason, doing this only once does not actually
-    // clear the radio's interrupt flag. So we do it twice. Why?
-    // kevinh: turn this off until root cause is known, because it can cause missed interrupts!
-    // spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
-    spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
+
+    // ack all interrupts, note - we did this already in the RX_DONE case above, and we don't want to do it twice
+    if (!(irq_flags & RH_RF95_RX_DONE))
+    {
+        // Sigh: on some processors, for some unknown reason, doing this only once does not actually
+        // clear the radio's interrupt flag. So we do it twice. Why?
+        // kevinh: turn this off until root cause is known, because it can cause missed interrupts!
+        // spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
+        spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
+    }
 }
 
 // These are low level functions that call the interrupt handler for the correct
@@ -343,6 +367,7 @@ void RH_RF95::setModeIdle()
     {
         spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_STDBY);
         _mode = RHModeIdle;
+        _isReceiving = false; // we definitely aren't receiving anything now
     }
 }
 
@@ -373,6 +398,7 @@ void RH_RF95::setModeTx()
         spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_TX);
         spiWrite(RH_RF95_REG_40_DIO_MAPPING1, 0x40); // Interrupt on TxDone
         _mode = RHModeTx;
+        _isReceiving = false; // we definitely aren't receiving anything now
     }
 }
 

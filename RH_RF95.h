@@ -878,6 +878,9 @@ protected:
 
     /// True when there is a valid message in the buffer
     volatile bool       _rxBufValid;
+
+    /// True if we have started to receive a packet (but not yet finished)
+    volatile bool       _isReceiving;
 };
 
 /// @example rf95_client.pde
