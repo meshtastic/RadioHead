@@ -150,17 +150,28 @@ void RH_RF95::handleInterrupt()
     // Read the interrupt register
     uint8_t irq_flags = spiRead(RH_RF95_REG_12_IRQ_FLAGS);
 
+    // Note: there can be substantial latency between ISR assertion and this function being run, therefore
+    // multiple flags might be set.  Handle them all
+
     if (irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     //    if (_mode == RHModeRx && irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     {
         _rxBad++;
         _isReceiving = false;
     }
-    else if (irq_flags & RH_RF95_RX_DONE)
+
+    if (irq_flags & RH_RF95_VALID_HEADER)
+    {
+        _isReceiving = true;
+    }    
+
+    if (irq_flags & RH_RF95_RX_DONE)
     {
         // Read the RegHopChannel register to check if CRC presence is signalled
         // in the header. If not it might be a stray (noise) packet.*
         uint8_t crc_present = spiRead(RH_RF95_REG_1C_HOP_CHANNEL) & RH_RF95_RX_PAYLOAD_CRC_IS_ON;
+
+        spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags, required before reading fifo (according to datasheet)
 
         if (!crc_present)
         {
@@ -176,7 +187,6 @@ void RH_RF95::handleInterrupt()
             spiWrite(RH_RF95_REG_0D_FIFO_ADDR_PTR, spiRead(RH_RF95_REG_10_FIFO_RX_CURRENT_ADDR));
             spiBurstRead(RH_RF95_REG_00_FIFO, _buf, len);
             _bufLen = len;
-            spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags, required before reading
 
             // Remember the last signal to noise ratio, LORA mode
             // Per page 111, SX1276/77/78/79 datasheet
@@ -204,16 +214,14 @@ void RH_RF95::handleInterrupt()
             _isReceiving = false;
         }
     }
-    else if (irq_flags & RH_RF95_VALID_HEADER)
-    {
-        _isReceiving = true;
-    }
-    else if (irq_flags & RH_RF95_TX_DONE)
+
+    if (irq_flags & RH_RF95_TX_DONE)
     {
         _txGood++;
         setModeIdle();
     }
-    else if (_mode == RHModeCad && irq_flags & RH_RF95_CAD_DONE)
+    
+    if (_mode == RHModeCad && irq_flags & RH_RF95_CAD_DONE)
     {
         _cad = irq_flags & RH_RF95_CAD_DETECTED;
         setModeIdle();
