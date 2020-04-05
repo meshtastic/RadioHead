@@ -153,11 +153,13 @@ void RH_RF95::handleInterrupt()
     // Note: there can be substantial latency between ISR assertion and this function being run, therefore
     // multiple flags might be set.  Handle them all
 
-    if (irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
+    bool haveRxError = irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR);
+    if (haveRxError)
     //    if (_mode == RHModeRx && irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     {
         _rxBad++;
         _isReceiving = false;
+        clearRxBuf();
     }
 
     if (irq_flags & RH_RF95_VALID_HEADER)
@@ -165,7 +167,7 @@ void RH_RF95::handleInterrupt()
         _isReceiving = true;
     }    
 
-    if (irq_flags & RH_RF95_RX_DONE)
+    if ((irq_flags & RH_RF95_RX_DONE) && !haveRxError)
     {
         // Read the RegHopChannel register to check if CRC presence is signalled
         // in the header. If not it might be a stray (noise) packet.*
@@ -177,6 +179,7 @@ void RH_RF95::handleInterrupt()
         {
             _rxBad++;
             _isReceiving = false;
+            clearRxBuf();
         }
         else
         {
