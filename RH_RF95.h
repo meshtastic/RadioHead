@@ -828,6 +828,9 @@ public:
     /// \patam[in] on bool, true turns the payload CRC on, false turns it off
     void setPayloadCRC(bool on);
  	
+    /// Return true if we are currently receiving a packet
+    bool isReceiving();
+    
 protected:
     /// This is a low level function to handle the interrupts for one instance of RH_RF95.
     /// Called automatically by isr*()
@@ -878,9 +881,6 @@ protected:
 
     /// True when there is a valid message in the buffer
     volatile bool       _rxBufValid;
-
-    /// True if we have started to receive a packet (but not yet finished)
-    volatile bool       _isReceiving;
 };
 
 /// @example rf95_client.pde

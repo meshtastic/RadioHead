@@ -25,8 +25,7 @@ PROGMEM static const RH_RF95::ModemConfig MODEM_CONFIG_TABLE[] =
 
 RH_RF95::RH_RF95(uint8_t slaveSelectPin, uint8_t interruptPin, RHGenericSPI &spi)
     : RHSPIDriver(slaveSelectPin, spi),
-      _rxBufValid(0),
-      _isReceiving(false)
+      _rxBufValid(0)
 {
     _interruptPin = interruptPin;
     _myInterruptIndex = 0xff; // Not allocated yet
@@ -140,6 +139,17 @@ void RH_RF95::prepareDeepSleep()
     detachInterrupt(interruptNumber);
 }
 
+bool RH_RF95::isReceiving() 
+{
+    // 0x0b == Look for header info valid, signal synchronized or signal detected
+    uint8_t reg = spiRead(RH_RF95_REG_18_MODEM_STAT) & 0x1f;
+    // Serial.printf("reg %x\n", reg);
+    return _mode == RHModeRx && (reg & (RH_RF95_MODEM_STATUS_SIGNAL_DETECTED | 
+        RH_RF95_MODEM_STATUS_SIGNAL_SYNCHRONIZED | 
+        RH_RF95_MODEM_STATUS_HEADER_INFO_VALID)) != 0;
+}
+
+
 // C++ level interrupt handler for this instance
 // LORA is unusual in that it has several interrupt lines, and not a single, combined one.
 // On MiniWirelessLoRa, only one of the several interrupt lines (DI0) from the RFM95 is usefuly
@@ -153,19 +163,14 @@ void RH_RF95::handleInterrupt()
     // Note: there can be substantial latency between ISR assertion and this function being run, therefore
     // multiple flags might be set.  Handle them all
 
+    // Note: we are running the chip in continuous receive mode (currently, so RX_TIMEOUT shouldn't ever occur)
     bool haveRxError = irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR);
     if (haveRxError)
     //    if (_mode == RHModeRx && irq_flags & (RH_RF95_RX_TIMEOUT | RH_RF95_PAYLOAD_CRC_ERROR))
     {
         _rxBad++;
-        _isReceiving = false;
         clearRxBuf();
     }
-
-    if (irq_flags & RH_RF95_VALID_HEADER)
-    {
-        _isReceiving = true;
-    }    
 
     if ((irq_flags & RH_RF95_RX_DONE) && !haveRxError)
     {
@@ -178,7 +183,6 @@ void RH_RF95::handleInterrupt()
         if (!crc_present)
         {
             _rxBad++;
-            _isReceiving = false;
             clearRxBuf();
         }
         else
@@ -213,8 +217,6 @@ void RH_RF95::handleInterrupt()
             validateRxBuf();
             if (_rxBufValid)
                 setModeIdle(); // Got one
-
-            _isReceiving = false;
         }
     }
 
@@ -224,7 +226,7 @@ void RH_RF95::handleInterrupt()
         setModeIdle();
     }
     
-    if (_mode == RHModeCad && irq_flags & RH_RF95_CAD_DONE)
+    if (_mode == RHModeCad && (irq_flags & RH_RF95_CAD_DONE))
     {
         _cad = irq_flags & RH_RF95_CAD_DETECTED;
         setModeIdle();
@@ -378,7 +380,6 @@ void RH_RF95::setModeIdle()
     {
         spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_STDBY);
         _mode = RHModeIdle;
-        _isReceiving = false; // we definitely aren't receiving anything now
     }
 }
 
@@ -409,7 +410,6 @@ void RH_RF95::setModeTx()
         spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_TX);
         spiWrite(RH_RF95_REG_40_DIO_MAPPING1, 0x40); // Interrupt on TxDone
         _mode = RHModeTx;
-        _isReceiving = false; // we definitely aren't receiving anything now
     }
 }
 
